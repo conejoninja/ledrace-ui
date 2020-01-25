@@ -14,6 +14,9 @@ import (
 
 // MQTT
 var token mqtt.Token
+var table *widgets.Table
+var bc *widgets.BarChart
+var gauges [4]*widgets.Gauge
 
 func main() {
 	opts := mqtt.NewClientOptions().AddBroker(config.MQTTServer())
@@ -38,7 +41,7 @@ func main() {
 	}
 	defer ui.Close()
 
-	bc := widgets.NewBarChart()
+	bc = widgets.NewBarChart()
 	bc.Data = []float64{300, 2000, 5000, 9999}
 	bc.Labels = []string{"Red", "Green", "Yellow", "Blue"}
 	bc.Title = "Speed"
@@ -50,7 +53,7 @@ func main() {
 
 	ui.Render(bc)
 
-	table := widgets.NewTable()
+	table = widgets.NewTable()
 	table.Rows = [][]string{
 		[]string{"Gopher", "Lap", "Speed", "Position"}, //, "Avg. Speed", "Q1", "Q2"},
 		[]string{"Red", "BBB", "CCC"},
@@ -73,7 +76,6 @@ func main() {
 
 	ui.Render(p)
 
-	var gauges [4]*widgets.Gauge
 	for g := 0; g < 4; g++ {
 		gauges[g] = widgets.NewGauge()
 		gauges[g].SetRect(30, g*3, 70, 3+3*g)
@@ -120,5 +122,7 @@ func main() {
 }
 
 var defaultHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-	go echo("[" + msg.Topic() + "] " + string(msg.Payload()))
+	table.Rows[0][0] = string(msg.Payload())
+	ui.Render(table)
+	//fmt.Println(msg.Topic(), string(msg.Payload()))
 }
