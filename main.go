@@ -1,41 +1,33 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"os"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
-	config "./config/local"
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
 )
 
-// MQTT
-var token mqtt.Token
 var table *widgets.Table
 var bc *widgets.BarChart
 var gauges [4]*widgets.Gauge
+var debug *widgets.Paragraph
+var conn *net.UDPConn
 
 func main() {
-	opts := mqtt.NewClientOptions().AddBroker(config.MQTTServer())
-	opts.SetClientID(config.DeviceName())
-	opts.SetUsername(config.MQTTUser())
-	opts.SetPassword(config.MQTTPassword())
-	opts.SetDefaultPublishHandler(defaultHandler)
-
-	mqttclient := mqtt.NewClient(opts)
-	if token = mqttclient.Connect(); token.Wait() && token.Error() != nil {
-		fmt.Println(token.Error())
-		panic(token.Error())
+	var err error
+	conn, err = net.ListenUDP("udp", &net.UDPAddr{
+		Port: 1053,
+		IP:   net.ParseIP("0.0.0.0"),
+	})
+	if err != nil {
+		panic(err)
 	}
 
-	if token = mqttclient.Subscribe(config.TrackChannel(), 0, defaultHandler); token.Wait() && token.Error() != nil {
-		fmt.Println(token.Error())
-		os.Exit(1)
-	}
-
+	defer conn.Close()
 	if err := ui.Init(); err != nil {
 		log.Fatalf("failed to initialize termui: %v", err)
 	}
@@ -55,16 +47,16 @@ func main() {
 
 	table = widgets.NewTable()
 	table.Rows = [][]string{
-		[]string{"Gopher", "Lap", "Speed", "Position"}, //, "Avg. Speed", "Q1", "Q2"},
-		[]string{"Red", "BBB", "CCC"},
-		[]string{"Gree", "EEE", "FFF"},
-		[]string{"Yellow", "HHH", "III"},
-		[]string{"Blue", "HHH", "III"},
+		[]string{"Gopher", "Lap", "Speed", "Distance"}, //, "Avg. Speed", "Q1", "Q2"},
+		[]string{"Red", "0", "0", "0"},
+		[]string{"Green", "0", "0", "0"},
+		[]string{"Yellow", "0", "0", "0"},
+		[]string{"Blue", "0", "0", "0"},
 	}
 	table.TextStyle = ui.NewStyle(ui.ColorWhite)
 	table.RowSeparator = true
 	table.BorderStyle = ui.NewStyle(ui.ColorGreen)
-	table.SetRect(0, 20, 100, 31)
+	table.SetRect(0, 20, 70, 31)
 	table.FillRow = true
 	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
 
@@ -75,6 +67,12 @@ func main() {
 	p.SetRect(36, 15, 64, 18)
 
 	ui.Render(p)
+
+	debug = widgets.NewParagraph()
+	debug.Text = "DEBUG"
+	debug.SetRect(0, 31, 70, 40)
+
+	ui.Render(debug)
 
 	for g := 0; g < 4; g++ {
 		gauges[g] = widgets.NewGauge()
@@ -107,6 +105,7 @@ func main() {
 
 	uiEvents := ui.PollEvents()
 	ticker := time.NewTicker(time.Second).C
+	go updateFromUDP()
 	for {
 		select {
 		case e := <-uiEvents:
@@ -116,13 +115,40 @@ func main() {
 			}
 		// use Go's built-in tickers for updating and drawing data
 		case <-ticker:
-			ui.Render(table)
+			//updateFromUDP()
 		}
 	}
 }
 
-var defaultHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-	table.Rows[0][0] = string(msg.Payload())
-	ui.Render(table)
-	//fmt.Println(msg.Topic(), string(msg.Payload()))
+func updateFromUDP() {
+	for {
+		message := make([]byte, 1000)
+		// don't handle errors #YOLO
+		rlen, _, _ := conn.ReadFromUDP(message[:])
+
+		dataStr := strings.TrimSpace(string(message[:rlen]))
+		debug.Text = dataStr
+		if dataStr != "none" && dataStr != "boot" && dataStr != "AT+C"{
+			data := strings.Split(dataStr, "|")
+			for i := 0; i < len(data); i++ {
+				player := strings.Split(data[i], ",")
+				if len(player)<3 {
+					continue
+				}
+				position, _ := strconv.Atoi(player[1])
+				position = position / 9
+				gauges[i].Percent = position
+				speed, _ := strconv.Atoi(player[0])
+				if speed < 0 {
+					speed = 0
+				}
+				bc.Data[i] = float64(speed)
+				table.Rows[i+1][1] = player[2]
+				table.Rows[i+1][2] = strconv.Itoa(speed)
+				table.Rows[i+1][3] = strconv.Itoa(position)
+			}
+		}
+		ui.Render(table, bc, gauges[0], gauges[1], gauges[2], gauges[3], debug)
+	}
+
 }
